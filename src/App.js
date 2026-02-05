@@ -1,8 +1,8 @@
 import { useState } from "react";
-import "./App.css";
-import KycForm from "./KycForm";
-import Camera from "./Camera";
-import { verifyFace } from "./api";
+import "./styles/App.css";
+import KycForm from "./components/KycForm";
+import Camera from "./components/Camera";
+import { verifyFace } from "./services/api";
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -48,3 +48,4 @@ function App() {
 }
 
 export default App;
+

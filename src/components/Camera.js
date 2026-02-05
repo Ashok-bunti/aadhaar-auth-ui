@@ -371,3 +371,4 @@ export default function Camera({ onCapture, onBack, details }) {
     );
 }
 
+

@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { toast } from "react-toastify";
-import { uploadAadhaar, fetchAadhaarDirect, uploadOfflineXML } from "./api";
+import { uploadAadhaar, fetchAadhaarDirect, uploadOfflineXML } from "../services/api";
+import { API_BASE_URL } from "../services/config";
 import { Upload, CheckCircle, FileText, ArrowRight, Loader2, ShieldCheck, X, Download, Eye, EyeOff } from "lucide-react";
 
 export default function KycForm({ onSuccess }) {
@@ -262,7 +263,8 @@ export default function KycForm({ onSuccess }) {
                                     <img
                                         src={extractedInfo.photo.includes('data:image') || extractedInfo.photo.includes('http')
                                             ? extractedInfo.photo
-                                            : `http://127.0.0.1:8000/${extractedInfo.photo.replace(/\\/g, '/')}`}
+                                            : `${API_BASE_URL}/${extractedInfo.photo.replace(/\\/g, '/')}`}
+
                                         alt="Aadhaar Photo"
                                         style={{
                                             width: '130px',
@@ -389,4 +391,3 @@ export default function KycForm({ onSuccess }) {
         </div>
     );
 }
-
