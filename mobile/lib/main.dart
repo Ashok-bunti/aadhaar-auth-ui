@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'screens/kyc_form_screen.dart';
 
+import 'package:google_fonts/google_fonts.dart';
+
 void main() {
   runApp(const AadhaarKycApp());
 }
@@ -10,28 +12,41 @@ class AadhaarKycApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const primaryColor = Color(0xFF1E40AF);
+    const secondaryColor = Color(0xFF14B8A6);
+    const backgroundColor = Color(0xFFF8FAFC);
+    const textPrimaryColor = Color(0xFF0F172A);
+    const errorColor = Color(0xFFEF4444);
+
     return MaterialApp(
-      title: 'Aadhaar KYC',
+      title: 'KYC',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        fontFamily: 'Roboto', // Classic professional font
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1E293B), // Slate 800
-          primary: const Color(0xFF3730A3),   // Indigo 800
-          secondary: const Color(0xFF0F172A), // Slate 900
-          surface: Colors.white,
-          background: const Color(0xFFF8FAFC), // Slate 50
+        textTheme: GoogleFonts.interTextTheme(
+          Theme.of(context).textTheme,
+        ).apply(
+          bodyColor: textPrimaryColor,
+          displayColor: textPrimaryColor,
         ),
-        appBarTheme: const AppBarTheme(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: primaryColor,
+          primary: primaryColor,
+          secondary: secondaryColor,
+          error: errorColor,
+          surface: Colors.white,
+          background: backgroundColor,
+        ),
+        scaffoldBackgroundColor: backgroundColor,
+        appBarTheme: AppBarTheme(
           backgroundColor: Colors.white,
-          foregroundColor: Color(0xFF1E293B),
+          foregroundColor: textPrimaryColor,
           elevation: 0,
           centerTitle: true,
-          titleTextStyle: TextStyle(
+          titleTextStyle: GoogleFonts.inter(
             fontSize: 20,
-            fontWeight: FontWeight.w700,
-            color: Color(0xFF1E293B),
+            fontWeight: FontWeight.w600,
+            color: textPrimaryColor,
           ),
         ),
         inputDecorationTheme: InputDecorationTheme(
@@ -48,24 +63,23 @@ class AadhaarKycApp extends StatelessWidget {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: Color(0xFF3730A3), width: 2),
+            borderSide: const BorderSide(color: primaryColor, width: 2),
           ),
           labelStyle: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w500),
           hintStyle: TextStyle(color: Colors.grey.shade400),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF3730A3),
+            backgroundColor: primaryColor,
             foregroundColor: Colors.white,
             elevation: 0,
             minimumSize: const Size(double.infinity, 58),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
-            textStyle: const TextStyle(
+            textStyle: GoogleFonts.inter(
               fontSize: 16,
               fontWeight: FontWeight.w600,
-              letterSpacing: 0.5,
             ),
           ),
         ),

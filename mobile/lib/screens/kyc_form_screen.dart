@@ -3,6 +3,9 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart'; // Added for TapGestureRecognizer
+import 'package:google_fonts/google_fonts.dart'; 
+import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../models/aadhaar_details.dart';
 import '../core/constants/api_config.dart';
@@ -17,15 +20,17 @@ class KycFormScreen extends StatefulWidget {
 
 class _KycFormScreenState extends State<KycFormScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final ApiService _apiService = ApiService();
+  final _uidController = TextEditingController();
+  final _passwordController = TextEditingController(); // For XML/PDF password
   
-  final TextEditingController _uidController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
+  File? _selectedFile;
+  String? _selectedFileName;
   
   bool _isLoading = false;
+  bool _isPasswordVisible = false;
   AadhaarDetails? _extractedDetails;
-  PlatformFile? _selectedFile;
-  bool _showPassword = false;
+  
+  final ApiService _apiService = ApiService();
 
   @override
   void initState() {
@@ -33,93 +38,94 @@ class _KycFormScreenState extends State<KycFormScreen> with SingleTickerProvider
     _tabController = TabController(length: 2, vsync: this);
   }
 
-  Future<void> _handleDirectFetch() async {
-    final cleanUid = _uidController.text.replaceAll(' ', '');
-    if (cleanUid.length != 12) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please enter a valid 12-digit Aadhaar number")),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    try {
-      final res = await _apiService.fetchAadhaarDirect(cleanUid);
-      setState(() {
-        _extractedDetails = AadhaarDetails.fromJson(res['data'] ?? res);
-      });
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Verification Failed: $e")),
-      );
-    } finally {
-      setState(() => _isLoading = false);
-    }
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _uidController.dispose();
+    _passwordController.dispose();
+    super.dispose();
   }
+
+  /// --------------------------------------------------------------------------
+  /// ACTION HANDLERS
+  /// --------------------------------------------------------------------------
 
   Future<void> _pickFile() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['zip', 'pdf'],
-      withData: !kIsWeb, // Get bytes on mobile as well for safety
-    );
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xml', 'zip', 'pdf'],
+      );
 
-    if (result != null) {
-      setState(() {
-        _selectedFile = result.files.first;
-      });
+      if (result != null) {
+        setState(() {
+          if (kIsWeb) {
+             // Web handling if needed
+          } else {
+            _selectedFile = File(result.files.single.path!);
+          }
+          _selectedFileName = result.files.single.name;
+        });
+      }
+    } catch (e) {
+      debugPrint("File picker error: $e");
     }
   }
 
-  Future<void> _handleOfflineXml() async {
+  void _removeFile() {
+    setState(() {
+      _selectedFile = null;
+      _selectedFileName = null;
+    });
+  }
+
+  Future<void> _handleSubmit() async {
     setState(() => _isLoading = true);
+    
     try {
-      final file = _selectedFile;
-      if (file == null) {
-        throw Exception("No file selected.");
-      }
-
-      List<int>? fileBytes;
-      if (file.bytes != null) {
-        fileBytes = file.bytes!.toList();
-      } else if (!kIsWeb && file.path != null) {
-        fileBytes = await File(file.path!).readAsBytes();
-      }
-
-      if (fileBytes == null) {
-        throw Exception("The selected file could not be read. Please try picking it again.");
-      }
-
-      final res = await _apiService.uploadOfflineXml(
-        fileBytes,
-        file.name,
-        _passwordController.text,
-      );
-
-      if (res == null) {
-        throw Exception("The server returned no data. Check your connection.");
-      }
-
-      final details = AadhaarDetails.fromJson(res);
+      AadhaarDetails? details;
       
+      // 1. Direct UID Fetch
+      if (_tabController.index == 0) {
+        // Validation
+        if (_uidController.text.length != 12) {
+          throw Exception("Please enter a valid 12-digit Aadhaar number");
+        }
+        // details = await _apiService.fetchAadhaarDirect(_uidController.text);
+        throw Exception("Direct fetch is currently disabled for demo. Please use Offline XML.");
+      } 
+      // 2. Offline XML/PDF
+      else {
+        if (_selectedFile == null) throw Exception("Please upload a file");
+        if (_passwordController.text.isEmpty) throw Exception("Please enter the file password");
+
+        // Read file bytes
+        final bytes = await _selectedFile!.readAsBytes();
+
+        final responseMap = await _apiService.uploadOfflineXml(
+          bytes, 
+          _selectedFileName!,
+          _passwordController.text
+        );
+        
+        details = AadhaarDetails.fromJson(responseMap);
+      }
+
+      if (details == null) throw Exception("Failed to verify Aadhaar details");
+
       setState(() {
         _extractedDetails = details;
       });
-      
-      debugPrint("Extracted Details: ${details.name}");
-      debugPrint("Photo Path from Server: ${details.photoPath}");
-    } catch (e, stack) {
-      debugPrint("ERROR IN VERIFICATION: $e");
-      debugPrint("STACKTRACE: $stack");
-      
-      String errorMsg = e.toString().contains('Null check operator') 
-          ? "Data processing error. Please try a different file."
-          : e.toString().replaceAll('Exception: ', '');
+    } catch (e) {
+      String errorMsg = e.toString().contains('Exception:') 
+          ? e.toString().replaceAll('Exception: ', '')
+          : "Verification failed. Please check inputs.";
           
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("Verification Failed: $errorMsg"),
-          backgroundColor: Colors.red.shade800,
+          content: Text(errorMsg),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          behavior: SnackBarBehavior.floating,
         ),
       );
     } finally {
@@ -127,35 +133,51 @@ class _KycFormScreenState extends State<KycFormScreen> with SingleTickerProvider
     }
   }
 
+  /// --------------------------------------------------------------------------
+  /// UI BUILDERS
+  /// --------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
+    if (_extractedDetails != null) {
+      return _buildIdentityReview(); 
+    }
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      appBar: AppBar(
-        title: const Text("Identity Verification"),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildStepIndicator(),
-            const SizedBox(height: 32),
-            if (_extractedDetails == null) ...[
-              const Text(
-                "Verification Method",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+      backgroundColor: Theme.of(context).colorScheme.background, // F8FAFC
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
+          child: Column(
+            children: [
+              // 1. Bar Indicator Removed
+
+              // 2. Titles
+              Text(
+                "Identity Verification",
+                style: GoogleFonts.inter(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700, // Extra Bold
+                  color: const Color(0xFF111827), // Gray 900
+                ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                "Choose how you want to verify your identity today.",
-                style: TextStyle(fontSize: 14, color: Color(0xFF64748B)),
+              Text(
+                "Choose your preferred verification method",
+                style: GoogleFonts.inter(
+                  fontSize: 15,
+                  color: const Color(0xFF6B7280), // Gray 500
+                ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 32),
+
+              // 3. Tab Pills
               _buildTabControl(),
               const SizedBox(height: 32),
+
+              // 4. Tab Content
               SizedBox(
-                height: 350,
+                height: 500, // Fixed height for form content
                 child: TabBarView(
                   controller: _tabController,
                   physics: const NeverScrollableScrollPhysics(),
@@ -165,380 +187,535 @@ class _KycFormScreenState extends State<KycFormScreen> with SingleTickerProvider
                   ],
                 ),
               ),
-            ] else 
-              _buildIdentityReview(),
-          ],
+
+              // 5. Footer (Security)
+              _buildSecurityFooter(),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildStepIndicator() {
-    bool isStep2 = _extractedDetails != null;
-    return Row(
-      children: [
-        _stepCircle("1", "Input", true),
-        _stepLine(isStep2),
-        _stepCircle("2", "Review", isStep2),
-        _stepLine(false),
-        _stepCircle("3", "Face", false),
-      ],
-    );
-  }
+  // --- WIDGETS ---
 
-  Widget _stepCircle(String num, String label, bool active) {
-    return Column(
+  Widget _buildBarIndicator() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Container(
-          width: 32,
-          height: 32,
+          width: 40,
+          height: 4,
           decoration: BoxDecoration(
-            color: active ? const Color(0xFF3730A3) : Colors.white,
-            shape: BoxShape.circle,
-            border: Border.all(color: active ? const Color(0xFF3730A3) : Colors.grey.shade300, width: 2),
-            boxShadow: active ? [BoxShadow(color: const Color(0xFF3730A3).withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))] : null,
-          ),
-          child: Center(
-            child: Text(
-              num,
-              style: TextStyle(color: active ? Colors.white : Colors.grey.shade400, fontWeight: FontWeight.bold, fontSize: 13),
-            ),
+            color: Theme.of(context).primaryColor, // Active Blue
+            borderRadius: BorderRadius.circular(2),
           ),
         ),
-        const SizedBox(height: 6),
-        Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? const Color(0xFF1E293B) : Colors.grey.shade400)),
+        const SizedBox(width: 8),
+        Container(
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE5E7EB), // Inactive Grey
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
       ],
-    );
-  }
-
-  Widget _stepLine(bool active) {
-    return Expanded(
-      child: Container(
-        height: 2,
-        margin: const EdgeInsets.only(bottom: 20, left: 8, right: 8),
-        color: active ? const Color(0xFF3730A3) : Colors.grey.shade200,
-      ),
     );
   }
 
   Widget _buildTabControl() {
     return Container(
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(16),
+        color: const Color(0xFFF3F4F6), // Gray 100
+        borderRadius: BorderRadius.circular(12),
       ),
       child: TabBar(
         controller: _tabController,
         indicator: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
           boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            )
           ],
         ),
-        labelColor: const Color(0xFF3730A3),
-        unselectedLabelColor: const Color(0xFF64748B),
-        labelStyle: const TextStyle(fontWeight: FontWeight.bold),
-        unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
+        labelColor: Theme.of(context).primaryColor,
+        unselectedLabelColor: const Color(0xFF6B7280),
+        labelStyle: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13),
+        unselectedLabelStyle: GoogleFonts.inter(fontWeight: FontWeight.w500, fontSize: 13),
         dividerColor: Colors.transparent,
+        indicatorSize: TabBarIndicatorSize.tab,
         tabs: const [
-          Tab(text: "Quick Fetch"),
+          Tab(text: "Aadhaar Number"),
           Tab(text: "Offline XML"),
         ],
       ),
     );
   }
 
+
   Widget _buildDirectFetchForm() {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _label("Aadhaar Number"),
         TextField(
           controller: _uidController,
           keyboardType: TextInputType.number,
-          maxLength: 12,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, letterSpacing: 2),
-          decoration: const InputDecoration(
-            counterText: "",
-            labelText: "Aadhaar Card Number",
-            hintText: "0000 0000 0000",
-            prefixIcon: Icon(Icons.badge_outlined, color: Color(0xFF64748B)),
-          ),
-          onChanged: (val) {
-            // Optional: Auto-format space logic could go here
-          },
+          style: const TextStyle(letterSpacing: 1.2, fontWeight: FontWeight.w500),
+          decoration: _inputDecoration("0000 0000 0000"),
         ),
-        const SizedBox(height: 16),
-        const Row(
-          children: [
-            Icon(Icons.info_outline, size: 16, color: Color(0xFF64748B)),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                "We will directly fetch your public information from the encrypted gateway.",
-                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 48),
-        _buildActionButton(
-          label: "Verify & Fetch Data",
-          icon: Icons.bolt_outlined,
-          onPressed: _handleDirectFetch,
+        const SizedBox(height: 24),
+        _actionButton("Fetch Identity Details", Icons.shield_outlined, _handleSubmit,
           isLoading: _isLoading,
-        ),
+          isPrimary: false), // Disabled/Secondary look as it's not the main flow usually
       ],
     );
   }
 
   Widget _buildOfflineXmlForm() {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (_selectedFile == null) ...[
-          GestureDetector(
-            onTap: _pickFile,
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 40),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.grey.shade200, width: 2),
-              ),
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(color: const Color(0xFFEEF2FF), shape: BoxShape.circle),
-                    child: const Icon(Icons.upload_file_outlined, size: 32, color: Color(0xFF3730A3)),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text("Select Aadhaar ZIP/PDF", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 8),
-                  const Text("Supported: .zip, .pdf", style: TextStyle(color: Color(0xFF64748B), fontSize: 13)),
-                ],
-              ),
-            ),
-          ),
-        ] else ...[
-          _buildSelectedFileCard(),
-          const SizedBox(height: 24),
-          TextField(
-            controller: _passwordController,
-            obscureText: !_showPassword,
-            decoration: InputDecoration(
-              labelText: "Security PIN / Password",
-              hintText: "Enter file password",
-              prefixIcon: const Icon(Icons.lock_outline),
-              suffixIcon: IconButton(
-                icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility, color: const Color(0xFF64748B)),
-                onPressed: () => setState(() => _showPassword = !_showPassword),
-              ),
-            ),
-          ),
-        ],
-        const SizedBox(height: 40),
-        _buildActionButton(
-          label: "Decrypt & Verify",
-          icon: Icons.verified_user_outlined,
-          onPressed: _handleOfflineXml,
-          isLoading: _isLoading,
-          enabled: _selectedFile != null,
+        // Helper Link
+        Row(
+          children: [
+             Expanded(
+               child: RichText(
+                 text: TextSpan(
+                   style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF374151)),
+                   children: [
+                     TextSpan(text: "E-Aadhaar: ", style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444))), // Red
+                     const TextSpan(text: "Visit "),
+                     TextSpan(
+                       text: "myaadhaar.uidai.gov.in",
+                       style: TextStyle(
+                         color: Theme.of(context).primaryColor, 
+                         fontWeight: FontWeight.w600,
+                         decoration: TextDecoration.underline
+                       ),
+                       recognizer: TapGestureRecognizer()..onTap = () async {
+                         final Uri url = Uri.parse("https://myaadhaar.uidai.gov.in"); 
+                         if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+                            debugPrint("Could not launch \$url");
+                         }
+                       },
+                     ),
+                     const TextSpan(text: " to download your ZIP file"),
+                   ],
+                 ),
+               ),
+             )
+          ],
         ),
+        const SizedBox(height: 20),
+
+        _label("Upload PDF File"),
+        _buildFileUpload(),
+        const SizedBox(height: 20),
+
+        _label("Password"),
+        TextField(
+          controller: _passwordController,
+          obscureText: !_isPasswordVisible,
+          decoration: _inputDecoration("e.g., AAAA1234").copyWith(
+            suffixIcon: IconButton(
+              icon: Icon(_isPasswordVisible ? Icons.visibility : Icons.visibility_off, color: Colors.grey),
+              onPressed: () => setState(() => _isPasswordVisible = !_isPasswordVisible),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text("Format: First 4 letters of your name (uppercase) + Birth Year (YYYY)", 
+          style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF6B7280))),
+        
+        const SizedBox(height: 24),
+        
+        _actionButton("Verify Offline e-KYC", Icons.verified_user_outlined, _handleSubmit,
+          isLoading: _isLoading,
+          isPrimary: true),
+      ],
+    );
+  }
+  
+  Widget _buildFileUpload() {
+    if (_selectedFile != null) {
+      // FILLED STATE (Green Box)
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFECFDF5), // Mint Green Light
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF10B981).withOpacity(0.3), width: 1), // Dashed green essentially
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: const BoxDecoration(
+                color: Color(0xFFD1FAE5), // Darker Mint
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.description, color: Color(0xFF047857)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                _selectedFileName ?? "file.pdf",
+                style: GoogleFonts.inter(
+                  color: const Color(0xFF047857), // Dark Green text
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, color: Color(0xFFEF4444)),
+              onPressed: _removeFile,
+            )
+          ],
+        ),
+      );
+    }
+
+    // EMPTY STATE (Dashed Box simulation)
+    return GestureDetector(
+      onTap: _pickFile,
+      child: Container(
+        width: double.infinity,
+        height: 120, // Taller
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFCBD5E1), width: 1, style: BorderStyle.solid), // Standard border for now
+        ),
+        child: CustomPaint(
+          painter: DashedBorderPainter(),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.upload_file, size: 28, color: Color(0xFF64748B)),
+              const SizedBox(height: 12),
+              Text(
+                "Click to Browse PDF",
+                style: GoogleFonts.inter(
+                  color: const Color(0xFF475569),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _label(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0, left: 4.0),
+      child: Text(text, style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF6B7280), fontWeight: FontWeight.w500)),
+    );
+  }
+
+  InputDecoration _inputDecoration(String hint) {
+    return InputDecoration(
+      hintText: hint,
+      filled: true,
+      fillColor: Colors.white,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Theme.of(context).primaryColor, width: 1.5)),
+    );
+  }
+
+  Widget _actionButton(String text, IconData icon, VoidCallback onTap, {required bool isLoading, required bool isPrimary}) {
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isPrimary ? Theme.of(context).primaryColor : const Color(0xFFCBD5E1),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        onPressed: isLoading ? null : onTap,
+        child: isLoading 
+          ? const CircularProgressIndicator(color: Colors.white)
+          : Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 20),
+                const SizedBox(width: 8),
+                Text(text, style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15)),
+              ],
+            ),
+      ),
+    );
+  }
+
+  Widget _buildSecurityFooter() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.security, size: 16, color: Color(0xFF6B7280)),
+        const SizedBox(width: 8),
+        Text("End-to-End Encryption Enabled", style: GoogleFonts.inter(color: const Color(0xFF6B7280), fontSize: 13, fontWeight: FontWeight.w500)),
       ],
     );
   }
 
-  Widget _buildSelectedFileCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF0FDF4),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFBBF7D0)),
+  // NOTE: Simple Review Screen (kept mostly functional/same just updating header if needed)
+  Widget _buildIdentityReview() {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: (){ setState(() => _extractedDetails = null); }), title: const Text("Review Details")),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            // Row indicators 
+            // Row indicators removed
+            const SizedBox(height: 32),
+            _buildReviewContent()
+          ],
+        ),
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.check_circle, color: Color(0xFF16A34A)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(_selectedFile!.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF166534))),
-                Text("${(_selectedFile!.size / 1024).toStringAsFixed(1)} KB", style: TextStyle(fontSize: 12, color: const Color(0xFF166534).withOpacity(0.7))),
-              ],
-            ),
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.all(24),
+        child: SizedBox(
+          height: 56,
+          child: ElevatedButton(
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => CameraScreen(details: _extractedDetails!)));
+            },
+            child: const Text("Proceed to Face Verification"),
           ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
-            onPressed: () => setState(() => _selectedFile = null),
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildReviewContent() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 15,
+            offset: const Offset(0, 4),
           )
         ],
       ),
-    );
-  }
-
-  Widget _buildIdentityReview() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text("Review Your Details", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-        const SizedBox(height: 8),
-        const Text("Verify that the information extracted below matches your official identity card.", style: TextStyle(color: Color(0xFF64748B))),
-        const SizedBox(height: 32),
-        _buildProfessionalIDCard(),
-        const SizedBox(height: 48),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => setState(() => _extractedDetails = null),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(0, 58),
-                  side: BorderSide(color: Colors.grey.shade300),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        children: [
+          // Main Content Area
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Left: Photo & Name
+                Column(
+                  children: [
+                    Container(
+                      width: 100,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                        color: Colors.grey.shade50,
+                      ),
+                      child: ClipRRect(
+                         borderRadius: BorderRadius.circular(7),
+                         child: _extractedDetails!.photoPath != null
+                            ? Image(image: _getPhotoProvider(), fit: BoxFit.cover)
+                            : const Center(child: Icon(Icons.person, color: Colors.grey, size: 40)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: 100,
+                      child: Text(
+                        _extractedDetails!.name, 
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black87)
+                      ),
+                    ),
+                  ],
                 ),
-                child: const Text("Reset", style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (context) => CameraScreen(details: _extractedDetails!)));
-                },
-                child: const Text("Next Step"),
-              ),
-            ),
-          ],
-        )
-      ],
-    );
-  }
-
-  Widget _buildProfessionalIDCard() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              color: const Color(0xFF3730A3),
-              child: const Row(
-                children: [
-                  Icon(Icons.shield, color: Colors.white, size: 18),
-                  SizedBox(width: 8),
-                  Text("AUTHENTICATED IDENTITY DOCUMENT", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                children: [
-                  Row(
+                const SizedBox(width: 20),
+                
+                // Right: Details (DOB, Gender, Address)
+                Expanded(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildPhotoAvatar(),
-                      const SizedBox(width: 20),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text("Aadhaar Number", style: TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
-                            Text(_extractedDetails!.uid, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B), letterSpacing: 1)),
-                            const SizedBox(height: 16),
-                            _idField("Name", _extractedDetails!.name),
-                            _idField("Date of Birth", _extractedDetails!.dob),
-                            _idField("Gender", _extractedDetails!.gender),
-                          ],
-                        ),
-                      )
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                               _cardLabel("DOB"),
+                               Text(_extractedDetails!.dob, style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87)),
+                            ]),
+                          ),
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                               _cardLabel("Gender"),
+                               Text(_extractedDetails!.gender, style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87)),
+                            ]),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      
+                      _cardLabel("Address"),
+                      Text(
+                        _extractedDetails!.address,
+                        style: GoogleFonts.inter(fontSize: 13, height: 1.4, color: Colors.black87)
+                      ),
                     ],
                   ),
-                  const Divider(height: 48),
-                  _idField("Address", _extractedDetails!.address, fullWidth: true),
-                ],
+                )
+              ],
+            ),
+          ),
+          
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          
+          // Bottom: Aadhaar Number
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            decoration: const BoxDecoration(
+               color: Color(0xFFF9FAFB), // Very Light Grey
+               borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
+            ),
+            child: Center(
+              child: Text(
+                _formatAadhaarBox(_extractedDetails!.uid),
+                style: GoogleFonts.sourceCodePro(
+                  fontSize: 18, 
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.0,
+                  color: const Color(0xFF111827) // Dark Grey/Black
+                ),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPhotoAvatar() {
-    String? photoPath = _extractedDetails?.photoPath;
-    ImageProvider? imageProvider;
-
-    if (photoPath != null && photoPath.isNotEmpty && !photoPath.contains('placehold.co')) {
-      if (photoPath.startsWith('data:image')) {
-        imageProvider = MemoryImage(base64Decode(photoPath.split(',').last));
-      } else {
-        String fullUrl = photoPath.startsWith('http') 
-            ? photoPath 
-            : "${ApiConfig.baseUrl}${photoPath.startsWith('/') ? '' : '/'}$photoPath";
-        imageProvider = NetworkImage(fullUrl);
-      }
-    }
-
-    return Container(
-      width: 100,
-      height: 125,
-      decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade100),
-      ),
-      child: imageProvider != null
-          ? ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Image(
-                image: imageProvider,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return const Center(child: Icon(Icons.broken_image_outlined, size: 32, color: Color(0xFF94A3B8)));
-                },
-              ),
-            )
-          : const Center(child: Icon(Icons.person, size: 48, color: Color(0xFFCBD5E1))),
-    );
-  }
-
-  Widget _idField(String label, String value, {bool fullWidth = false}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label.toUpperCase(), style: const TextStyle(fontSize: 9, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 14, color: Color(0xFF334155), fontWeight: FontWeight.w600, height: 1.4),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildActionButton({required String label, required IconData icon, required VoidCallback onPressed, bool isLoading = false, bool enabled = true}) {
-    return ElevatedButton.icon(
-      onPressed: (isLoading || !enabled) ? null : onPressed,
-      icon: isLoading 
-        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-        : Icon(icon, size: 20),
-      label: Text(label),
+  Widget _cardLabel(String text) {
+     return Padding(
+       padding: const EdgeInsets.only(bottom: 2),
+       child: Text(text, style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w500, color: const Color(0xFF6B7280))),
+     );
+  }
+
+  Widget _realCardField(String label, String value, {bool isBold = false}) {
+    // Deprecated, using new layout above
+    return const SizedBox.shrink();
+  }
+
+  String _formatAadhaarBox(String uid) {
+    if (uid.length != 12) return uid;
+    return "${uid.substring(0,4)} ${uid.substring(4,8)} ${uid.substring(8,12)}";
+  }
+  
+  ImageProvider _getPhotoProvider() {
+     // Trust photoPath first
+     if (_extractedDetails!.photoPath != null && _extractedDetails!.photoPath!.isNotEmpty) {
+        if (_extractedDetails!.photoPath!.startsWith('http')) {
+           return NetworkImage(_extractedDetails!.photoPath!);
+        } else if (_extractedDetails!.photoPath!.length > 200) {
+           // Probably a base64 string
+           String cleanBase64 = _extractedDetails!.photoPath!.replaceAll(RegExp(r'\s+'), '');
+           if (cleanBase64.contains(',')) {
+             cleanBase64 = cleanBase64.split(',').last;
+           }
+           try {
+             return MemoryImage(base64Decode(cleanBase64));
+           } catch (e) {
+             debugPrint("Error decoding base64: $e");
+             return const AssetImage('assets/logo.png');
+           }
+        }
+     }
+     return const AssetImage('assets/logo.png'); // Fallback
+  }
+
+  Widget _detailRow(String label, String? value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(flex: 2, child: Text(label, style: const TextStyle(color: Colors.grey))),
+          Expanded(flex: 3, child: Text(value ?? "N/A", style: const TextStyle(fontWeight: FontWeight.bold))),
+        ],
+      ),
     );
   }
+}
+
+// Helper for Dashed Border
+class DashedBorderPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = const Color(0xFF94A3B8) // Slate 400
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    
+    final Path path = Path();
+    // Simple dashed border implementation
+    double dashWidth = 5;
+    double dashSpace = 3;
+    double startX = 0;
+    
+    // Top line
+    while (startX < size.width) {
+      canvas.drawLine(Offset(startX, 0), Offset(startX + dashWidth, 0), paint);
+      startX += dashWidth + dashSpace;
+    }
+    
+    // Right line
+    double startY = 0;
+     while (startY < size.height) {
+      canvas.drawLine(Offset(size.width, startY), Offset(size.width, startY + dashWidth), paint);
+      startY += dashWidth + dashSpace;
+    }
+    
+    // Bottom line
+    startX = size.width;
+    while (startX > 0) {
+      canvas.drawLine(Offset(startX, size.height), Offset(startX - dashWidth, size.height), paint);
+      startX -= dashWidth + dashSpace;
+    }
+    
+    // Left line
+    startY = size.height;
+    while (startY > 0) {
+      canvas.drawLine(Offset(0, startY), Offset(0, startY - dashWidth), paint);
+      startY -= dashWidth + dashSpace;
+    }
+  }
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }

@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:typed_data';
+import 'dart:math' as math;
 import '../models/aadhaar_details.dart';
 import '../services/api_service.dart';
 import 'dart:io';
+import 'kyc_form_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   final AadhaarDetails details;
@@ -119,8 +121,11 @@ class _CameraScreenState extends State<CameraScreen> {
                 const SizedBox(height: 32),
                 ElevatedButton(
                   onPressed: () {
-                    Navigator.pop(context); // Close dialog
-                    Navigator.pop(context); // Go back to form
+                     // Close dialog and navigate back to the clean form (resetting state)
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (context) => const KycFormScreen()),
+                      (route) => false,
+                    );
                   },
                   child: const Text("Done"),
                 )
@@ -206,46 +211,85 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Widget _buildBiometricOverlay() {
-    return Positioned.fill(
-      child: ColorFiltered(
-        colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.7), BlendMode.srcOut),
-        child: Stack(
-          children: [
-            Container(
-              decoration: const BoxDecoration(
-                color: Colors.transparent,
-              ),
-            ),
-            Center(
-              child: Container(
-                width: 280,
-                height: 380,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(140),
+    return Stack(
+      children: [
+        // Darkened Background with Face Hole
+        Positioned.fill(
+          child: ColorFiltered(
+            colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.8), BlendMode.srcOut),
+            child: Stack(
+              children: [
+                Container(
+                  decoration: const BoxDecoration(
+                    color: Colors.transparent,
+                  ),
                 ),
-              ),
+                Center(
+                  child: Container(
+                    width: 280,
+                    height: 380,
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(140),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
+        
+        // Dotted Border (Green & Red)
+        Center(
+        // Dotted Border Removed
+        ),
+      ],
     );
   }
 
   Widget _buildInstructions() {
     return Positioned(
-      top: 150,
+      top: 100, // Moved up
       left: 0,
       right: 0,
       child: Column(
         children: [
-          const Text("Live Face Verification", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(20)),
-            child: const Text("Keep your head within the frame", style: TextStyle(color: Colors.white, fontSize: 13)),
+          const Text(
+            "Face Verification",
+            style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 0.5),
           ),
+          const SizedBox(height: 30),
+          
+          // Instruction Chips
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            alignment: WrapAlignment.center,
+            children: [
+              _instructionChip(Icons.wb_sunny_outlined, "Bright lighting"),
+              _instructionChip(Icons.face, "Remove glasses"),
+              _instructionChip(Icons.remove_red_eye_outlined, "Blink eyes"),
+            ],
+          )
+        ],
+      ),
+    );
+  }
+  
+  Widget _instructionChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white, size: 16),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
         ],
       ),
     );
@@ -259,7 +303,10 @@ class _CameraScreenState extends State<CameraScreen> {
         height: 80,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 4),
+          border: Border.all(color: Colors.greenAccent, width: 4), // Green Accent for action
+          boxShadow: [
+             BoxShadow(color: Colors.greenAccent.withOpacity(0.3), blurRadius: 20, spreadRadius: 5)
+          ]
         ),
         child: Container(
           margin: const EdgeInsets.all(6),
@@ -292,4 +339,73 @@ class _CameraScreenState extends State<CameraScreen> {
       ],
     );
   }
+}
+
+// Custom Painter for Dotted Border
+class DottedBorderPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = const Color(0xFF22C55E) // Green 500 by default
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final Path path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+        Rect.fromLTWH(0, 0, size.width, size.height),
+        const Radius.circular(145),
+      ));
+
+    // Draw green dashed line
+    drawDashedPath(canvas, path, paint, dashWidth: 10, dashSpace: 8);
+    
+    // Draw Red corners for visual flair (as requested "green and red")
+    final Paint redPaint = Paint()
+      ..color = const Color(0xFFEF4444) // Red 500
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+      
+      // Top Left Corner
+      canvas.drawArc(
+         Rect.fromLTWH(0, 0, 60, 60), 
+         math.pi, 
+         math.pi/2, 
+         false, 
+         redPaint
+      );
+      // Top Right
+      canvas.drawArc(
+         Rect.fromLTWH(size.width - 60, 0, 60, 60), 
+         3 * math.pi / 2, 
+         math.pi/2, 
+         false, 
+         redPaint
+      );
+      // Bottom Corners
+      canvas.drawArc(Rect.fromLTWH(0, size.height - 60, 60, 60), math.pi/2, math.pi/2, false, redPaint);
+      canvas.drawArc(Rect.fromLTWH(size.width - 60, size.height - 60, 60, 60), 0, math.pi/2, false, redPaint);
+  }
+  
+  void drawDashedPath(Canvas canvas, Path path, Paint paint, {double dashWidth = 10, double dashSpace = 5}) {
+    // Simple implementation for dashing
+    var metrics = path.computeMetrics();
+    for (var metric in metrics) {
+      double start = 0;
+      while (start < metric.length) {
+        // Draw green dashes only in the "middle" sections, avoiding the corners which are red
+        // This is complex so simplified: Just draw dashed green everywhere, red on top
+        // But to avoid overlap, we stick to green dashes.
+         canvas.drawPath(
+            metric.extractPath(start, start + dashWidth),
+            paint,
+         );
+         start += dashWidth + dashSpace;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }
